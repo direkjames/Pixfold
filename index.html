@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixfold – free pixel art editor</title>
+<meta name="description" content="Pixfold is a free pixel art editor that runs in your browser on a computer. Draw, fill, export PNG. Nothing to install and nothing leaves your device.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script type="module" src="/src/main.ts"></script>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand"><img src="/favicon.svg" alt=""><b><i>pix</i>fold</b></div>
+    <nav class="menu" aria-label="Main menu">
+      <button data-menu="file" aria-haspopup="menu">File</button>
+      <button data-menu="edit" aria-haspopup="menu">Edit</button>
+      <button data-menu="view" aria-haspopup="menu">View</button>
+      <button data-menu="palette" aria-haspopup="menu">Palette</button>
+    </nav>
+    <div class="file"><i></i><span id="fname">untitled.png</span></div>
+    <button class="ibtn" id="undo" aria-label="Undo" title="Undo (Ctrl+Z)"><svg class="i" viewBox="0 0 24 24"><path d="M3 7v6h6M3 13a9 9 0 1 0 3-7.7L3 8"/></svg></button>
+    <button class="ibtn" id="redo" aria-label="Redo" title="Redo (Ctrl+Y)"><svg class="i" viewBox="0 0 24 24"><path d="M21 7v6h-6M21 13a9 9 0 1 1-3-7.7L21 8"/></svg></button>
+    <div class="sp"></div>
+    <div class="zoom"><button id="zout" aria-label="Zoom out" title="Zoom out (-)">&minus;</button><span id="zlabel" aria-live="polite">800%</span><button id="zin" aria-label="Zoom in" title="Zoom in (+)">+</button></div>
+    <button class="ibtn" id="theme" aria-label="Theme: system" title="Theme: system"></button>
+    <button class="export" id="export">Export PNG</button>
+  </header>
+
+  <aside class="rail" aria-label="Tools" id="rail">
+    <button class="tool on" data-tool="pencil" aria-label="Pencil" title="Pencil (B)" aria-pressed="true"><svg class="i" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg><kbd>B</kbd></button>
+    <button class="tool" data-tool="eraser" aria-label="Eraser" title="Eraser (E)" aria-pressed="false"><svg class="i" viewBox="0 0 24 24"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21M22 21H7M5 11l9 9"/></svg><kbd>E</kbd></button>
+    <button class="tool" data-tool="fill" aria-label="Fill" title="Fill (G)" aria-pressed="false"><svg class="i" viewBox="0 0 24 24"><path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11ZM5 2l5 5M2 13h15M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"/></svg><kbd>G</kbd></button>
+    <button class="tool" data-tool="picker" aria-label="Color picker" title="Color picker (I)" aria-pressed="false"><svg class="i" viewBox="0 0 24 24"><path d="m2 22 1-1h3l9-9M3 21v-3l9-9M15 6l3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z"/></svg><kbd>I</kbd></button>
+    <div class="sep"></div>
+    <button class="tool" data-tool="line" aria-label="Line" title="Line (L)" aria-pressed="false"><svg class="i" viewBox="0 0 24 24"><path d="M5 19 19 5"/></svg><kbd>L</kbd></button>
+    <button class="tool" data-tool="rect" aria-label="Rectangle" title="Rectangle (U)" aria-pressed="false"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1.5"/></svg><kbd>U</kbd></button>
+    <button class="tool" data-tool="ellipse" aria-label="Ellipse" title="Ellipse (O)" aria-pressed="false"><svg class="i" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9" ry="7"/></svg><kbd>O</kbd></button>
+    <div class="sep"></div>
+    <button class="tool" data-tool="pan" aria-label="Pan" title="Pan (H or hold Space)" aria-pressed="false"><svg class="i" viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-4 0M14 10V4a2 2 0 0 0-4 0v2M10 10.5V6a2 2 0 0 0-4 0v8M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-6-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg><kbd>H</kbd></button>
+    <button class="tool" data-tool="zoom" aria-label="Zoom" title="Zoom (Z)" aria-pressed="false"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/></svg><kbd>Z</kbd></button>
+    <div class="swatches" title="Colours (X swaps)">
+      <label class="bgc"><b id="bgsw"></b><input type="color" id="bgin" aria-label="Background colour"></label>
+      <label class="fgc"><b id="fgsw"></b><input type="color" id="fgin" aria-label="Drawing colour"></label>
+    </div>
+  </aside>
+
+  <main class="stage" id="stage">
+    <canvas id="view" role="img" aria-label="Drawing canvas"></canvas>
+    <div class="hint"><span><b>Click</b> draw</span><span><b>Right click</b> second colour</span><span><b>Shift</b> straight line</span><span><b>Space</b> pan</span><span><b>Wheel</b> zoom</span></div>
+  </main>
+
+  <aside class="side" aria-label="Panels">
+    <section class="sec"><h3>Preview <small id="pvz">1&times;</small></h3>
+      <div class="nav"><canvas id="mini" width="72" height="72"></canvas><div id="info"></div></div></section>
+    <section class="sec"><h3>Palette <small>Pixfold</small></h3>
+      <div class="pal" id="pal"></div>
+      <div class="recent" id="recent" hidden><span>Recent</span><div id="recentrow"></div></div></section>
+    <section class="sec"><h3 id="opttitle">Pencil</h3>
+      <div class="opt">
+        <div class="row"><label for="size">Size</label><input type="range" id="size" min="1" max="64" value="1"><b id="sizev">1 px</b></div>
+        <div class="row"><span id="pplabel">Pixel-perfect</span><button class="sw" id="pp" role="switch" aria-checked="true" aria-labelledby="pplabel"></button></div>
+        <div class="row" id="fillrow"><span id="fslabel">Fill shape</span><button class="sw off" id="fs" role="switch" aria-checked="false" aria-labelledby="fslabel"></button></div>
+      </div></section>
+    <section class="sec grow"><h3>History <small id="hcount"></small></h3>
+      <ol class="hist" id="hist"></ol></section>
+  </aside>
+
+  <footer class="status">
+    <span>Canvas <b id="sc">32 &times; 32</b></span><span>Cursor <b id="sx">–</b></span><span>Tool <b id="st">Pencil</b></span><span>Max canvas <b>2000 &times; 2000</b></span>
+    <span class="ok"><i></i><span id="saved">Not saved yet</span></span>
+  </footer>
+</div>
+
+<div id="menupop" class="pop" role="menu" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<dialog id="dnew">
+  <form method="dialog" id="fnew">
+    <h2>New canvas</h2>
+    <div class="presets" id="presets"></div>
+    <div class="fields">
+      <label>Width<input type="number" id="nw" min="1" max="2000" value="32" required></label>
+      <label>Height<input type="number" id="nh" min="1" max="2000" value="32" required></label>
+    </div>
+    <p class="help">Up to 2000 &times; 2000 pixels.</p>
+    <p class="warn" id="nwarn" hidden>Your current drawing will be replaced. Save it first (Ctrl+S) if you want to keep it.</p>
+    <p class="err" id="nerr" role="alert" hidden></p>
+    <div class="btns"><button type="button" class="ghost" id="ncancel">Cancel</button><button type="submit" class="export">Create</button></div>
+  </form>
+</dialog>
+
+<dialog id="dexp">
+  <form method="dialog" id="fexp">
+    <h2>Export PNG</h2>
+    <div class="presets" id="scales" role="radiogroup" aria-label="Scale"></div>
+    <p class="help" id="expinfo"></p>
+    <div class="btns"><button type="button" class="ghost" id="xcancel">Cancel</button><button type="submit" class="export">Save PNG</button></div>
+  </form>
+</dialog>
+
+<div class="desktop-only" role="alert"><div><img src="/favicon.svg" alt="" width="56" height="56"><h2>Pixfold works on a computer</h2><p>Open this page in a desktop or laptop browser to draw.</p></div></div>
+</body>
+</html>
