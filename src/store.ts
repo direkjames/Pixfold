@@ -3,9 +3,12 @@
 const DB = 'pixfold', STORE = 'kv';
 
 export interface SavedLayer { name: string; visible: boolean; locked: boolean; opacity: number; blend: string; buffer: ArrayBuffer }
-/** `layers` is the current format; `buffer` alone is a single-layer drawing saved by version 0.1. */
+/**
+ * `project` (v3) is a compressed .pfold file, so big drawings stay small in storage.
+ * Older shapes still load: `layers` (0.2 raw buffers) and `buffer` alone (0.1, one layer).
+ */
 export interface Saved {
-  w: number; h: number; layers?: SavedLayer[]; active?: number; buffer?: ArrayBuffer;
+  v?: number; w: number; h: number; project?: Blob; layers?: SavedLayer[]; active?: number; buffer?: ArrayBuffer;
   palette: string[]; fg: string; bg: string; name: string;
 }
 

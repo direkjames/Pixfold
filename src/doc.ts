@@ -52,6 +52,7 @@ export class Doc {
   static fromLayers(w: number, h: number, specs: LayerSpec[], active = 0): Doc {
     const d = new Doc(w, h);
     if (specs.length < 1 || specs.length > maxLayers(w, h)) throw new RangeError('This file has too many layers for its canvas size');
+    d.nextId = 1; // so new layers continue the numbering of the loaded ones
     d.layers = specs.map((s) => {
       if (s.px.length !== w * h) throw new RangeError('A layer does not match the canvas size');
       const L = d.newLayer(s.px, String(s.name).slice(0, 64) || undefined);
@@ -84,11 +85,25 @@ export class Doc {
   }
   private recompPixel(i: number) {
     let out = 0;
-    for (const L of this.layers) if (L.visible) out = blendPixel(out, L.px[i], L.opacity, L.blend);
+    for (const L of this.layers) {
+      const s = L.px[i];
+      if (L.visible && s >>> 24) out = blendPixel(out, s, L.opacity, L.blend);
+    }
     this.data[i] = out;
   }
   recompAll() {
-    for (let i = 0; i < this.data.length; i++) this.recompPixel(i);
+    // Layer by layer, bottom to top, so memory is read in order (much faster on big canvases than pixel by pixel).
+    // Transparent source pixels are skipped without a call.
+    const data = this.data;
+    data.fill(0);
+    for (const L of this.layers) {
+      if (!L.visible || L.opacity <= 0) continue;
+      const px = L.px, op = L.opacity, mode = L.blend;
+      for (let i = 0; i < px.length; i++) {
+        const s = px[i];
+        if (s >>> 24) data[i] = blendPixel(data[i], s, op, mode);
+      }
+    }
     this.dirty = { x0: 0, y0: 0, x1: this.w - 1, y1: this.h - 1 };
   }
   private mark(i: number) {

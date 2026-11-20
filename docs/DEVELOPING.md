@@ -32,7 +32,15 @@ npm run build      # typecheck + production build into dist/
 - Autosave (IndexedDB key `current`) holds all layers; drawings saved by 0.1 (one `buffer`) still load as a single layer.
 - Animation frames would add a dimension to each layer's pixels.
 
-## Hero images
+## Hosting and deploying
+
+The site is on GitHub Pages at https://direkjames.github.io/Pixfold/. A push to `master` runs `.github/workflows/pages.yml` (install, tests, build, publish `dist/`), so a failing test blocks the deploy. Settings → Pages must stay on **GitHub Actions**: in "deploy from branch" mode the raw source `index.html` is served and the page shows as bare HTML. Never commit `dist/`.
+
+`vite.config.ts` sets `base: './'` so the build works under `/Pixfold/`, and adds a Content-Security-Policy meta tag to the build only (Pages cannot send headers). The policy allows only the app's own files, so `assetsInlineLimit: 0` keeps the small fonts as files: inlined `data:` fonts are blocked by it. Check the console for policy errors after any change to assets.
+
+Autosave stores a compressed `.pfold` blob in IndexedDB (key `current`, `v: 3`). Saves from 0.1 and 0.2 still load.
+
+## Hero images and social preview
 
 ```powershell
 npm run build
@@ -40,4 +48,4 @@ npx vite preview --port 4173
 node scripts/hero.mjs
 ```
 
-Set `CHROME` to a Chrome or Edge path if it is not in the default location.
+Set `CHROME` to a Chrome or Edge path if it is not in the default location. The script also writes `docs/screenshots/og.png`; copy it to `public/og.png` for the social preview.

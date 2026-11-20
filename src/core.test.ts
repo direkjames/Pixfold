@@ -195,6 +195,18 @@ describe('layers', () => {
     expect(doc.layers[1].px[1]).toBe(BLUE);
     expect(doc.data[1]).toBe(BLUE);
   });
+  it('a loaded drawing keeps counting layer names from where it left off', () => {
+    const px = new Uint32Array(4);
+    const doc = Doc.fromLayers(2, 2, [{ name: 'Layer 1', visible: true, locked: false, opacity: 100, blend: 'normal', px }]);
+    doc.addLayer();
+    expect(doc.layers[1].name).toBe('Layer 2');
+  });
+  it('bad layer settings from a file are cleaned up', () => {
+    const doc = Doc.fromLayers(2, 2, [{ name: '', visible: true, locked: false, opacity: 900, blend: 'bogus', px: new Uint32Array(4) }]);
+    expect(doc.layers[0].opacity).toBe(100);
+    expect(doc.layers[0].blend).toBe('normal');
+    expect(doc.layers[0].name.length).toBeGreaterThan(0);
+  });
   it('duplicate copies the pixels', () => {
     const doc = new Doc(2, 2);
     paint(doc, [3], GREEN);

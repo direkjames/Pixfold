@@ -35,6 +35,16 @@ function toast(msg: string, ms = 3200) {
   toastTimer = window.setTimeout(() => (t.hidden = true), ms);
 }
 
+// A bug or a failed browser call must never leave the user guessing.
+let lastFail = 0;
+const fail = () => {
+  if (Date.now() - lastFail < 5000) return;
+  lastFail = Date.now();
+  toast('Something went wrong. Your drawing is still here: press Ctrl+S to save a copy.', 6000);
+};
+addEventListener('unhandledrejection', fail);
+addEventListener('error', fail);
+
 // ---------- theme ----------
 let theme: Theme = (['light', 'dark', 'system'] as const).find((t) => t === pref.get('theme')) ?? 'system';
 const mq = matchMedia('(prefers-color-scheme: dark)');
@@ -66,11 +76,17 @@ function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(flushSave, 800 + (doc.layers.length * doc.w * doc.h) / 100_000); // big drawings wait longer
 }
+let saving = false, saveAgain = false;
 async function flushSave() {
   clearTimeout(saveTimer);
-  const layers = doc.layers.map((l) => ({ name: l.name, visible: l.visible, locked: l.locked, opacity: l.opacity, blend: l.blend, buffer: l.px.buffer.slice(0) as ArrayBuffer }));
-  const ok = await saveDoc({ w: doc.w, h: doc.h, layers, active: doc.active, palette, fg, bg, name: docName });
-  $('saved').textContent = ok ? 'Autosaved ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Autosave unavailable';
+  if (saving) { saveAgain = true; return; } // one write at a time; run again afterwards for newer changes
+  saving = true;
+  let ok = false;
+  try { ok = await saveDoc({ v: 3, w: doc.w, h: doc.h, project: await encodeProject(doc, palette), palette, fg, bg, name: docName }); }
+  catch { ok = false; }
+  saving = false;
+  $('saved').textContent = ok ? 'Autosaved ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Autosave failed. Press Ctrl+S to keep your work';
+  if (saveAgain) { saveAgain = false; void flushSave(); }
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void flushSave(); });
 
@@ -307,15 +323,25 @@ function startRename(i: number) {
 }
 
 const lop = $('lop') as HTMLInputElement, lbl = $('lbl') as HTMLSelectElement;
-let opFrom: number | null = null;
+let opFrom: number | null = null, opPending = -1, opFrame = 0;
+// Re-flattening a huge canvas takes a moment, so dragging the slider applies at most once per frame.
+const applyOpacity = () => {
+  opFrame = 0;
+  if (opPending < 0) return;
+  doc.setProp(doc.layer, 'opacity', opPending);
+  opPending = -1;
+  view.invalidate(); scheduleCount();
+};
 lop.addEventListener('input', () => {
   const L = doc.layer, v = Number(lop.value);
   if (opFrom === null) opFrom = L.opacity;
-  doc.setProp(L, 'opacity', v);
+  opPending = v;
   $('lopv').textContent = `${v}%`;
-  view.invalidate(); scheduleCount();
+  if (!opFrame) opFrame = requestAnimationFrame(applyOpacity);
 });
 lop.addEventListener('change', () => {
+  cancelAnimationFrame(opFrame);
+  applyOpacity();
   const L = doc.layer;
   if (opFrom !== null && opFrom !== L.opacity) { history.push(doc.propChange(L, 'opacity', opFrom, L.opacity, 'Layer opacity')); afterChange(); }
   opFrom = null;
@@ -513,6 +539,7 @@ stage.addEventListener('drop', async (e) => {
 const baseName = () => docName.replace(/\.[^.]+$/, '');
 async function openBlob(file: Blob, name: string) {
   try {
+    if (file.size > 300_000_000) throw new RangeError('That file is too large to open.');
     if (name.toLowerCase().endsWith(EXT)) {
       const r = await decodeProject(file);
       if (r.palette.length) { palette = r.palette; renderPalette(); }
@@ -523,15 +550,22 @@ async function openBlob(file: Blob, name: string) {
     toast(err instanceof RangeError || err instanceof ProjectError ? err.message : 'Pixfold could not open that file. Use a Pixfold project, PNG, GIF or WebP file.');
   }
 }
+let busy = false; // a double press of Ctrl+S or Ctrl+O must not open two dialogs
 async function openFile() {
+  if (busy) return;
+  busy = true;
   try { const r = await pickFile(); if (r) await openBlob(r.file, r.file.name); }
   catch { toast('Could not open the file picker'); }
+  finally { busy = false; }
 }
 async function saveFile() {
+  if (busy) return;
+  busy = true;
   try {
     const name = await saveBlob(await encodeProject(doc, palette), baseName() + EXT, 'project');
     if (name) { docName = name; $('fname').textContent = name; toast(`Saved ${name}`); scheduleSave(); }
   } catch { toast('Could not save the project'); }
+  finally { busy = false; }
 }
 
 const dnew = $('dnew') as HTMLDialogElement, dexp = $('dexp') as HTMLDialogElement;
@@ -722,14 +756,18 @@ function bumpSize(d: number) {
 // ---------- start ----------
 async function boot() {
   let d: Doc | null = null;
+  let restoreFailed = false;
   const s = await loadDoc();
   if (s) {
     try {
-      if (s.layers?.length) {
+      if (s.project instanceof Blob) {
+        d = (await decodeProject(s.project)).doc;
+      } else if (s.layers?.length) {
         const specs = s.layers.map((l) => ({ ...l, px: new Uint32Array(l.buffer) }));
         d = Doc.fromLayers(s.w, s.h, specs, s.active ?? 0);
       } else if (s.buffer && s.buffer.byteLength === s.w * s.h * 4) d = new Doc(s.w, s.h, new Uint32Array(s.buffer)); // saved by 0.1
     } catch { d = null; }
+    restoreFailed = !d;
   }
   if (d && s) {
     try {
@@ -757,5 +795,6 @@ async function boot() {
   $('saved').textContent = d ? 'Restored your last drawing' : 'Not saved yet';
   refreshOptions(); refreshHistory(); renderLayers(); refreshInfo(); scheduleCount();
   view.invalidate();
+  if (restoreFailed) toast('Your last drawing could not be restored.', 8000);
 }
 void boot();

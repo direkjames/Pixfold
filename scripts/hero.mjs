@@ -86,7 +86,7 @@ p{margin-top:${h * 0.03}px;font-size:${w * 0.0145}px;line-height:1.45;color:#5E5
 .pills .a{background:#12877F;color:#fff}.pills .b{background:#FFE1D1;color:#B84A14}.pills .c{background:#FFF0C2;color:#8A6200}
 .shot{position:absolute;left:${w * 0.44}px;top:${h * 0.13}px;width:${w * 0.66}px;border-radius:22px;box-shadow:0 30px 90px rgba(40,30,20,.28),0 0 0 1px rgba(0,0,0,.08)}
 </style><div class=dots></div>
-<div class=copy><div class=logo>${mark}<b><i>pix</i>fold</b></div><h1>Pixel art, free in your browser.</h1><p>Draw, fill and export crisp PNGs. No sign-up, nothing to install, and nothing leaves your device.</p><div class=pills><span class=a>Free</span><span class=b>No account</span><span class=c>Works offline</span></div></div>
+<div class=copy><div class=logo>${mark}<b><i>pix</i>fold</b></div><h1>Pixel art, free in your browser.</h1><p>Draw, fill and export crisp PNGs. No sign-up, nothing to install, and nothing leaves your device.</p><div class=pills><span class=a>Free</span><span class=b>No account</span><span class=c>Stays on your device</span></div></div>
 <img class=shot src="${uri(appLight)}">`;
 
 const heroB = (w, h) => `<!doctype html><meta charset=utf-8>${fonts}<style>
@@ -111,6 +111,7 @@ async function hero(name, html, w, h) {
 }
 await hero('hero-1920x1080', heroA(1920, 1080), 1920, 1080);
 await hero('hero-1680x1050', heroB(1680, 1050), 1680, 1050);
+await hero('og', heroA(1200, 630), 1200, 630); // social preview, copy to public/og.png
 
 ws.close();
 proc.kill();

@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://direkjames.github.io/Pixfold/sitemap.xml

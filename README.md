@@ -4,11 +4,13 @@
 
 **A free pixel art editor that runs in your browser.**
 
-![Status](https://img.shields.io/badge/status-active-12877F) ![Version](https://img.shields.io/badge/version-0.2.0-FF7A3D) ![Platform](https://img.shields.io/badge/platform-desktop%20browsers-3E7CB1) ![Price](https://img.shields.io/badge/price-free-FFC53D)
+![Status](https://img.shields.io/badge/status-active-12877F) ![Version](https://img.shields.io/badge/version-0.2.1-FF7A3D) ![Platform](https://img.shields.io/badge/platform-desktop%20browsers-3E7CB1) ![Price](https://img.shields.io/badge/price-free-FFC53D)
 
 ![Pixfold](docs/screenshots/hero-1920x1080.png)
 
 Pixfold lets you draw pixel art on a computer, with no account and nothing to install. Your drawing stays on your device and is saved automatically, so you can close the tab and pick up where you left off.
+
+**[Open Pixfold](https://direkjames.github.io/Pixfold/)**
 
 </div>
 
@@ -40,7 +42,7 @@ Pixfold lets you draw pixel art on a computer, with no account and nothing to in
 
 Tip: hold **Space** and drag to move around, scroll to zoom, and hold **Shift** while drawing for a straight line. The colour picker (I) reads what you see; hold **Alt** to read only the selected layer.
 
-A PNG cannot hold layers, so keep the project file if you want to edit them later.
+A PNG cannot hold layers, so keep the project file if you want to edit them later. The automatic save lives in your browser only, so clearing the site's data removes it. Save a project to keep your work safe.
 
 ## Requirements
 
@@ -56,3 +58,7 @@ TypeScript, Vite and the HTML canvas. Fonts are bundled, so Pixfold makes no req
 ## Status
 
 Active.
+
+## Credits
+
+Fonts: [Bricolage Grotesque](https://fonts.google.com/specimen/Bricolage+Grotesque) and [Silkscreen](https://fonts.google.com/specimen/Silkscreen), both under the SIL Open Font License.
