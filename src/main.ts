@@ -1,16 +1,34 @@
 import './style.css';
 import { BLENDS, Doc, History, MAX_SIZE, Stroke, hexToU32, maxLayers, u32ToHex, type Blend, type Layer, type LayerChange, type PixelChange } from './doc';
-import { ellipsePoints, floodFill, line, pushPerfect, rectPoints, type Pt } from './raster';
+import { ellipsePoints, floodFill, line, mirrorSpots, pushPerfect, rectPoints, type Pt } from './raster';
+import {
+  allMask, combine, decodeMask, eachInMask, encodeMask, flipClip, invertMask, liftClip, maskBox, placeClip, polygonMask,
+  rectMask, rotateClip, wandMask, type Clip, type Mask, type SelMode,
+} from './selection';
 import { SCALES, fromImage, maxScale, pickFile, saveBlob, toPng } from './io';
 import { EXT, ProjectError, decodeProject, encodeProject } from './project';
 import { loadDoc, pref, saveDoc } from './store';
 import { View } from './view';
 
-type ToolId = 'pencil' | 'eraser' | 'fill' | 'picker' | 'line' | 'rect' | 'ellipse' | 'pan' | 'zoom';
+type ToolId = 'pencil' | 'eraser' | 'fill' | 'picker' | 'line' | 'rect' | 'ellipse' | 'marquee' | 'lasso' | 'wand' | 'move' | 'pan' | 'zoom';
 type Theme = 'light' | 'dark' | 'system';
-const NAMES: Record<ToolId, string> = { pencil: 'Pencil', eraser: 'Eraser', fill: 'Fill', picker: 'Color picker', line: 'Line', rect: 'Rectangle', ellipse: 'Ellipse', pan: 'Pan', zoom: 'Zoom' };
+const NAMES: Record<ToolId, string> = {
+  pencil: 'Pencil', eraser: 'Eraser', fill: 'Fill', picker: 'Color picker', line: 'Line', rect: 'Rectangle', ellipse: 'Ellipse',
+  marquee: 'Rectangle select', lasso: 'Lasso', wand: 'Magic wand', move: 'Move', pan: 'Pan', zoom: 'Zoom',
+};
 const BRUSH: ToolId[] = ['pencil', 'eraser', 'line', 'rect', 'ellipse'];
-const KEYS: Record<string, ToolId> = { b: 'pencil', e: 'eraser', g: 'fill', i: 'picker', l: 'line', u: 'rect', o: 'ellipse', h: 'pan', z: 'zoom' };
+const SELECT_TOOLS: ToolId[] = ['marquee', 'lasso', 'wand'];
+const KEYS: Record<string, ToolId> = { b: 'pencil', e: 'eraser', g: 'fill', i: 'picker', l: 'line', u: 'rect', o: 'ellipse', m: 'marquee', q: 'lasso', w: 'wand', v: 'move', h: 'pan', z: 'zoom' };
+const HELP: Partial<Record<ToolId, string>> = {
+  fill: 'Fills the touching pixels of the same colour on this layer.',
+  picker: 'Click to pick a colour from what you see. Hold Alt to read only this layer. Right click sets the second colour.',
+  marquee: 'Drag to select a rectangle. Hold Shift to add, Alt to remove. Click to deselect.',
+  lasso: 'Draw around what you want. Hold Shift to add, Alt to remove. Click to deselect.',
+  wand: 'Click to select the pixels of the same colour on this layer. Hold Shift to add, Alt to remove.',
+  move: 'Drag to move the selection, or the whole layer if nothing is selected. Hold Ctrl to copy. Arrow keys nudge by one pixel.',
+  pan: 'Drag to move around. You can also hold Space with any tool.',
+  zoom: 'Click to zoom in, Alt+click to zoom out.',
+};
 const DEFAULT_PALETTE = ['#2a2233', '#e4504a', '#ff8a7a', '#fff1dc', '#f2d7b0', '#d9b88a', '#12877f', '#ffc53d', '#ff7a3d', '#3e7cb1', '#7bc8f6', '#a5d86e', '#6b4f9e', '#f7a8c4', '#8a8f98', '#ffffff'];
 const HEX = /^#[0-9a-f]{6}$/;
 
@@ -18,6 +36,10 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 
 let tool: ToolId = 'pencil';
 let size = 1, perfect = true, fillShape = false;
+let symH = false, symV = false;                 // mirror drawing across the canvas centre
+let selMode: SelMode = 'replace', wandTouching = true;
+let sel: Mask | null = null;                    // the selection, one byte per canvas pixel
+let clip: Clip | null = null;                   // what Copy and Cut hold (inside Pixfold only)
 let fg = '#e4504a', bg = '#fff1dc';
 let palette = [...DEFAULT_PALETTE];
 let recent: string[] = [];
@@ -167,6 +189,10 @@ function refreshOptions() {
   $('pp').closest('.row')!.toggleAttribute('hidden', tool !== 'pencil' && tool !== 'eraser');
   ($('pp') as HTMLButtonElement).disabled = size > 1;
   $('fillrow').toggleAttribute('hidden', tool !== 'rect' && tool !== 'ellipse');
+  $('symrow').toggleAttribute('hidden', !BRUSH.includes(tool));
+  $('selrow').toggleAttribute('hidden', !SELECT_TOOLS.includes(tool));
+  $('wandrow').toggleAttribute('hidden', tool !== 'wand');
+  $('opthelp').textContent = HELP[tool] ?? '';
   document.querySelectorAll<HTMLButtonElement>('.tool').forEach((b) => {
     const on = b.dataset.tool === tool;
     b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
@@ -217,6 +243,7 @@ function loadDocument(d: Doc, name: string) {
   doc = d; docName = name;
   history.clear();
   view.setDoc(d);
+  setSelection(null);
   $('fname').textContent = name;
   $('sc').textContent = `${d.w} × ${d.h}`;
   refreshHistory(); renderLayers(); refreshInfo(); scheduleSave(); scheduleCount();
@@ -357,7 +384,12 @@ lbl.addEventListener('change', () => {
 
 // ---------- drawing ----------
 let space = false;
-type Drag = { kind: 'pan'; x: number; y: number } | { kind: 'draw' };
+type Drag =
+  | { kind: 'pan'; x: number; y: number }
+  | { kind: 'draw' }
+  | { kind: 'marquee'; a: Pt; b: Pt; mode: SelMode }
+  | { kind: 'lasso'; pts: Pt[]; mode: SelMode }
+  | { kind: 'move'; m: MoveState };
 let drag: Drag | null = null;
 let stroke: Stroke | null = null;
 let color = 0, start: Pt = { x: 0, y: 0 }, lastPt: Pt | null = null, lastDrawn: Pt = { x: 0, y: 0 };
@@ -367,27 +399,38 @@ const refs = new Map<number, number>();
 const inDoc = (p: Pt) => p.x >= 0 && p.y >= 0 && p.x < doc.w && p.y < doc.h;
 const brushOrigin = () => (size - 1) >> 1;
 
-function stamp(p: Pt, c: number) {
-  const o = brushOrigin();
-  for (let dy = 0; dy < size; dy++) for (let dx = 0; dx < size; dx++) {
-    const x = p.x - o + dx, y = p.y - o + dy;
-    if (x >= 0 && y >= 0 && x < doc.w && y < doc.h) stroke!.set(y * doc.w + x, c);
+/** With a selection, drawing only changes pixels inside it. */
+const allowed = (i: number) => !sel || sel[i] === 1;
+
+/** Write one pixel, and its mirror images when mirroring is on. Nothing is written outside the canvas or the selection. */
+function put(x: number, y: number, c: number) {
+  for (const q of mirrorSpots(x, y, doc.w, doc.h, symH, symV)) {
+    if (q.x < 0 || q.y < 0 || q.x >= doc.w || q.y >= doc.h) continue;
+    const i = q.y * doc.w + q.x;
+    if (allowed(i)) stroke!.set(i, c);
   }
 }
+function stamp(p: Pt, c: number) {
+  const o = brushOrigin();
+  for (let dy = 0; dy < size; dy++) for (let dx = 0; dx < size; dx++) put(p.x - o + dx, p.y - o + dy, c);
+}
 const usePerfect = () => perfect && size === 1 && (tool === 'pencil' || tool === 'eraser');
+/** Pixel-perfect drawing paints a point, then may take back the corner pixel before it; counts keep shared mirror pixels right. */
+function paintPerfect(p: Pt, d: 1 | -1) {
+  for (const q of mirrorSpots(p.x, p.y, doc.w, doc.h, symH, symV)) {
+    if (q.x < 0 || q.y < 0 || q.x >= doc.w || q.y >= doc.h) continue;
+    const i = q.y * doc.w + q.x;
+    if (!allowed(i)) continue;
+    const n = (refs.get(i) ?? 0) + d;
+    refs.set(i, n);
+    if (d > 0) stroke!.set(i, color); else if (n <= 0) stroke!.revert(i);
+  }
+}
 function addPoint(p: Pt) {
   if (!usePerfect()) { stamp(p, color); return; }
-  if (inDoc(p)) {
-    const i = p.y * doc.w + p.x;
-    refs.set(i, (refs.get(i) ?? 0) + 1);
-    stroke!.set(i, color);
-  }
+  paintPerfect(p, 1);
   const removed = pushPerfect(kept, p);
-  if (removed && inDoc(removed)) {
-    const i = removed.y * doc.w + removed.x, n = (refs.get(i) ?? 1) - 1;
-    refs.set(i, n);
-    if (n <= 0) stroke!.revert(i);
-  }
+  if (removed) paintPerfect(removed, -1);
 }
 function extend(to: Pt) {
   const seg = line(lastDrawn.x, lastDrawn.y, to.x, to.y);
@@ -413,14 +456,16 @@ function drawShape(p: Pt, shift: boolean) {
   stroke!.revertAll();
   const solid = fillShape && tool !== 'line';
   for (const q of shapePoints(start, p, shift)) {
-    if (solid) { if (inDoc(q)) stroke!.set(q.y * doc.w + q.x, color); } else stamp(q, color);
+    if (solid) put(q.x, q.y, color); else stamp(q, color);
   }
 }
 
 function doFill(p: Pt, c: number) {
   const L = doc.layer;
   if (!inDoc(p) || L.px[p.y * doc.w + p.x] === c) return;
-  const idx = floodFill(L.px, doc.w, doc.h, p.x, p.y);
+  let idx = floodFill(L.px, doc.w, doc.h, p.x, p.y);
+  if (sel) idx = idx.filter((i) => sel![i] === 1); // a selection limits where fill can reach
+  if (!idx.length) return;
   const before = new Uint32Array(idx.length), after = new Uint32Array(idx.length).fill(c);
   for (let k = 0; k < idx.length; k++) before[k] = L.px[idx[k]];
   const ch: PixelChange = { kind: 'px', name: 'Fill', layer: L.id, idx, before, after };
@@ -441,6 +486,155 @@ function canDraw() {
   if (!L.visible) toast('This layer is hidden. Show it to draw on it.');
   else if (L.locked) toast('This layer is locked. Unlock it to draw on it.');
   return L.visible && !L.locked;
+}
+
+// ---------- selection ----------
+function setSelection(m: Mask | null) {
+  sel = m;
+  view.setSelection(m);
+  const b = m && maskBox(m, doc.w, doc.h);
+  $('ssel').textContent = b ? `${b.x1 - b.x0 + 1} × ${b.y1 - b.y0 + 1}` : '–';
+}
+
+/** A history entry that changes pixels and the selection together, so undo and redo put both back. */
+function selEntry(name: string, pc: PixelChange | null, before: Mask | null, after: Mask | null): LayerChange {
+  const n = doc.w * doc.h, b = encodeMask(before), a = encodeMask(after);
+  return {
+    kind: 'layer', name, weight: (pc?.idx.length ?? 0) + (b?.length ?? 0) + (a?.length ?? 0),
+    undo: () => { if (pc) doc.apply(pc, false); setSelection(decodeMask(b, n)); },
+    redo: () => { if (pc) doc.apply(pc, true); setSelection(decodeMask(a, n)); },
+  };
+}
+/** Any pixels are already changed; this moves the selection and records one undo step for both. */
+function commitSelection(name: string, pc: PixelChange | null, after: Mask | null) {
+  const before = sel;
+  if (!pc && !before && !after) return;
+  setSelection(after);
+  history.push(selEntry(name, pc, before, after));
+  afterChange();
+}
+const selectAll = () => commitSelection('Select all', null, allMask(doc.w, doc.h));
+const deselect = () => { if (sel) commitSelection('Deselect', null, null); };
+const invertSel = () => commitSelection('Invert selection', null, sel ? invertMask(sel) : allMask(doc.w, doc.h));
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** What a move is carrying: the selected pixels of the active layer (or the whole layer when nothing is selected). */
+interface MoveState { clip: Clip; whole: boolean; copy: boolean; start: Pt; dx: number; dy: number; mask: Mask | null }
+
+function liftForMove() {
+  const whole = !sel;
+  const c = liftClip(doc.layer.px, sel ?? allMask(doc.w, doc.h), doc.w, doc.h);
+  return c ? { clip: c, whole } : null;
+}
+/** Show the piece shifted by (dx, dy): undo what the last step did, clear the source (unless copying), then place it. */
+function applyMove(s: Stroke, m: MoveState, dx: number, dy: number) {
+  s.revertAll();
+  const c = m.clip;
+  if (!m.copy) {
+    for (let y = 0; y < c.h; y++) for (let x = 0; x < c.w; x++) {
+      const k = y * c.w + x;
+      if (c.mask[k] && c.px[k] >>> 24) s.set((c.y + y) * doc.w + c.x + x, 0); // only opaque pixels need clearing
+    }
+  }
+  const pl = placeClip(c, dx, dy, doc.w, doc.h);
+  for (let k = 0; k < pl.idx.length; k++) s.set(pl.idx[k], pl.color[k]);
+  m.dx = dx; m.dy = dy; m.mask = pl.mask;
+}
+function startMove(p: Pt, e: PointerEvent) {
+  const l = liftForMove();
+  if (!l) return toast('Nothing to move');
+  let opaque = 0;
+  for (let k = 0; k < l.clip.px.length; k++) if (l.clip.mask[k] && l.clip.px[k] >>> 24) opaque++;
+  if (opaque > MAX_LIVE_MOVE) return toast('That piece is too big to drag. Select a smaller area, or move it with the arrow keys.', 5000);
+  stroke = new Stroke(doc, doc.layer);
+  drag = { kind: 'move', m: { clip: l.clip, whole: l.whole, copy: e.ctrlKey || e.metaKey, start: p, dx: 0, dy: 0, mask: null } };
+  canvas.setPointerCapture(e.pointerId);
+}
+function finishMove(m: MoveState) {
+  const s = stroke;
+  stroke = null;
+  if (!s || (m.dx === 0 && m.dy === 0)) { view.selShift = { x: 0, y: 0 }; view.invalidate(); return; }
+  const pc = s.commit(m.copy ? 'Copy and move' : 'Move');
+  commitSelection(m.copy ? 'Copy and move' : 'Move', pc, m.whole ? sel : combine(null, m.mask!, 'replace'));
+}
+/**
+ * Change many pixels of the active layer at once. A Stroke keeps a Map entry per pixel, which is too heavy for
+ * millions of pixels, so big edits (delete, paste, rotate, arrow-key moves) build the undo arrays directly.
+ */
+function bulkChange(name: string, clear: number[], set: { idx: number[]; color: number[] }): PixelChange | null {
+  const L = doc.layer, n = L.px.length, val = new Uint32Array(n), hit = new Uint8Array(n);
+  for (const i of clear) hit[i] = 1;
+  for (let k = 0; k < set.idx.length; k++) { hit[set.idx[k]] = 1; val[set.idx[k]] = set.color[k]; }
+  let count = 0;
+  for (let i = 0; i < n; i++) if (hit[i] && val[i] !== L.px[i]) count++;
+  if (!count) return null;
+  const idx = new Uint32Array(count), before = new Uint32Array(count), after = new Uint32Array(count);
+  for (let i = 0, k = 0; i < n; i++) if (hit[i] && val[i] !== L.px[i]) { idx[k] = i; before[k] = L.px[i]; after[k] = val[i]; k++; }
+  const ch: PixelChange = { kind: 'px', name, layer: L.id, idx, before, after };
+  doc.apply(ch, true);
+  return ch;
+}
+/** Canvas indices of the opaque pixels inside a mask on the active layer (the ones that must be cleared when they move away). */
+function opaqueIn(mask: Mask): number[] {
+  const px = doc.layer.px, out: number[] = [];
+  eachInMask(mask, doc.w, doc.h, (i) => { if (px[i] >>> 24) out.push(i); });
+  return out;
+}
+const MAX_LIVE_MOVE = 600_000; // dragging re-draws the piece on every mouse move, so very large pieces move with the arrow keys instead
+
+function nudge(dx: number, dy: number) {
+  if (!canDraw()) return;
+  const l = liftForMove();
+  if (!l) return;
+  const pl = placeClip(l.clip, dx, dy, doc.w, doc.h);
+  const ch = bulkChange('Nudge', opaqueIn(sel ?? allMask(doc.w, doc.h)), pl);
+  commitSelection('Nudge', ch, l.whole ? sel : combine(null, pl.mask, 'replace'));
+}
+
+function copySel(quiet = false): boolean {
+  if (!sel) { toast('Select something first'); return false; }
+  clip = liftClip(doc.layer.px, sel, doc.w, doc.h);
+  if (clip && !quiet) toast('Copied');
+  return !!clip;
+}
+function deleteSel(name = 'Delete') {
+  if (!sel) return toast('Select something first');
+  if (!canDraw()) return;
+  const ch = bulkChange(name, opaqueIn(sel), { idx: [], color: [] });
+  if (ch) { history.push(ch); afterChange(); } else toast('Nothing to remove in the selection');
+}
+const cutSel = () => { if (copySel(true)) deleteSel('Cut'); };
+function pasteClip() {
+  if (!clip) return toast('Copy or cut something first');
+  if (!canDraw()) return;
+  const mid = view.toDoc(view.cw / 2, view.ch / 2); // land in the middle of what you are looking at
+  const nx = clamp(Math.round(mid.x - clip.w / 2), 0, Math.max(0, doc.w - clip.w));
+  const ny = clamp(Math.round(mid.y - clip.h / 2), 0, Math.max(0, doc.h - clip.h));
+  const pl = placeClip(clip, nx - clip.x, ny - clip.y, doc.w, doc.h);
+  commitSelection('Paste', bulkChange('Paste', [], pl), combine(null, pl.mask, 'replace'));
+}
+
+const TRANSFORMS = { fh: 'Flip horizontal', fv: 'Flip vertical', cw: 'Rotate 90° clockwise', ccw: 'Rotate 90° counter-clockwise', '180': 'Rotate 180°' } as const;
+/** Flip or rotate the selection, or the whole active layer when nothing is selected. */
+function transform(kind: keyof typeof TRANSFORMS) {
+  if (!canDraw()) return;
+  const whole = !sel, L = doc.layer;
+  if (whole && (kind === 'cw' || kind === 'ccw') && doc.w !== doc.h) return toast('Select an area first. Turning a whole layer by 90° needs a square canvas.');
+  const mask = sel ?? allMask(doc.w, doc.h);
+  const c = liftClip(L.px, mask, doc.w, doc.h);
+  if (!c) return;
+  const t = kind === 'fh' ? flipClip(c, 'h') : kind === 'fv' ? flipClip(c, 'v') : rotateClip(c, kind);
+  const pl = placeClip(t, 0, 0, doc.w, doc.h);
+  const ch = bulkChange(TRANSFORMS[kind], opaqueIn(mask), pl);
+  if (!ch && whole) return toast('Nothing to change on this layer');
+  commitSelection(TRANSFORMS[kind], ch, whole ? null : combine(null, pl.mask, 'replace'));
+}
+
+function finishSelect(d: Extract<Drag, { kind: 'marquee' | 'lasso' }>) {
+  const click = d.kind === 'marquee' ? d.a.x === d.b.x && d.a.y === d.b.y : d.pts.length < 3;
+  if (click) { if (d.mode === 'replace') deselect(); return; }
+  const m = d.kind === 'marquee' ? rectMask(doc.w, doc.h, d.a.x, d.a.y, d.b.x, d.b.y) : polygonMask(doc.w, doc.h, d.pts);
+  commitSelection('Select', null, combine(sel, m, d.mode));
 }
 
 const canvas = $('view') as HTMLCanvasElement;
@@ -468,6 +662,18 @@ canvas.addEventListener('pointerdown', (e) => {
   if (e.altKey && drawTools.includes(tool)) return pick(p, e.button);
   if (tool === 'picker') return pick(p, e.button, e.altKey);
   if (tool === 'zoom') return view.zoomStep(e.altKey || e.button === 2 ? -1 : 1, sx, sy);
+  if (SELECT_TOOLS.includes(tool)) {
+    if (e.button !== 0) return;
+    const mode: SelMode = e.shiftKey ? 'add' : e.altKey ? 'sub' : selMode;
+    if (tool === 'wand') {
+      if (inDoc(p)) commitSelection('Magic wand', null, combine(sel, wandMask(doc.layer.px, doc.w, doc.h, p.x, p.y, wandTouching), mode));
+      return;
+    }
+    drag = tool === 'marquee' ? { kind: 'marquee', a: p, b: p, mode } : { kind: 'lasso', pts: [p], mode };
+    canvas.setPointerCapture(e.pointerId);
+    return;
+  }
+  if (tool === 'move') { if (e.button === 0 && canDraw()) startMove(p, e); return; }
   if (!canDraw()) return;
   color = tool === 'eraser' ? 0 : hexToU32(e.button === 2 ? bg : fg);
   if (tool !== 'eraser') pushRecent(e.button === 2 ? bg : fg);
@@ -492,6 +698,21 @@ canvas.addEventListener('pointermove', (e) => {
     view.ox = Math.round(view.ox + e.clientX - drag.x); view.oy = Math.round(view.oy + e.clientY - drag.y);
     drag.x = e.clientX; drag.y = e.clientY; view.invalidate(); return;
   }
+  if (drag.kind === 'marquee') {
+    drag.b = p; view.marquee = { x0: drag.a.x, y0: drag.a.y, x1: p.x, y1: p.y };
+    updateHover(p); return;
+  }
+  if (drag.kind === 'lasso') {
+    const last = drag.pts[drag.pts.length - 1];
+    if (last.x !== p.x || last.y !== p.y) drag.pts.push(p);
+    view.lasso = drag.pts;
+    updateHover(p); return;
+  }
+  if (drag.kind === 'move') {
+    const m = drag.m, dx = p.x - m.start.x, dy = p.y - m.start.y;
+    if (dx !== m.dx || dy !== m.dy) { applyMove(stroke!, m, dx, dy); if (!m.whole) view.selShift = { x: dx, y: dy }; }
+    updateHover(p); return;
+  }
   if (tool === 'pencil' || tool === 'eraser') {
     const evs = e.getCoalescedEvents?.() ?? [];
     for (const ce of evs.length ? evs : [e]) { const c = local(ce); extend(view.toDoc(c.sx, c.sy)); }
@@ -505,7 +726,10 @@ function endDrag() {
   const d = drag;
   drag = null;
   $('stage').classList.remove('panning');
-  if (d?.kind !== 'draw' || !stroke) return;
+  if (!d || d.kind === 'pan') return;
+  if (d.kind === 'marquee' || d.kind === 'lasso') { view.marquee = null; view.lasso = null; finishSelect(d); view.invalidate(); return; }
+  if (d.kind === 'move') { finishMove(d.m); return; }
+  if (!stroke) return;
   if (tool === 'pencil' || tool === 'eraser') lastPt = lastDrawn;
   const ch = stroke.commit(NAMES[tool]);
   stroke = null;
@@ -633,9 +857,9 @@ function redo() { if (history.redo(doc)) afterChange(); }
 $('undo').onclick = undo; $('redo').onclick = redo;
 function clearLayer() {
   if (!canDraw()) return;
-  const L = doc.layer, s = new Stroke(doc, L);
-  for (let i = 0; i < L.px.length; i++) if (L.px[i]) s.set(i, 0);
-  const ch = s.commit('Clear layer');
+  const clear: number[] = [], px = doc.layer.px;
+  for (let i = 0; i < px.length; i++) if (px[i]) clear.push(i);
+  const ch = bulkChange('Clear layer', clear, { idx: [], color: [] });
   if (ch) { history.push(ch); afterChange(); } else toast('This layer is already empty');
 }
 const toggleGrid = () => { view.grid = !view.grid; view.invalidate(); };
@@ -659,12 +883,28 @@ const MENUS: Record<string, Item[]> = {
   ],
   edit: [
     { label: 'Undo', key: 'Ctrl+Z', run: undo, off: () => history.pos === 0 },
-    { label: 'Redo', key: 'Ctrl+Y', run: redo, off: () => history.pos >= history.items.length },
+    { label: 'Redo', key: 'Ctrl+Y', run: redo, off: () => history.pos >= history.items.length }, '-',
+    { label: 'Cut', key: 'Ctrl+X', run: cutSel, off: () => !sel },
+    { label: 'Copy', key: 'Ctrl+C', run: () => { copySel(); }, off: () => !sel },
+    { label: 'Paste', key: 'Ctrl+V', run: pasteClip, off: () => !clip },
+    { label: 'Delete', key: 'Del', run: () => deleteSel(), off: () => !sel }, '-',
+    { label: 'Flip horizontal', key: 'Shift+H', run: () => transform('fh') },
+    { label: 'Flip vertical', key: 'Shift+V', run: () => transform('fv') },
+    { label: 'Rotate 90° clockwise', run: () => transform('cw') },
+    { label: 'Rotate 90° counter-clockwise', run: () => transform('ccw') },
+    { label: 'Rotate 180°', run: () => transform('180') },
+  ],
+  select: [
+    { label: 'Select all', key: 'Ctrl+A', run: selectAll },
+    { label: 'Deselect', key: 'Ctrl+D', run: deselect, off: () => !sel },
+    { label: 'Invert selection', key: 'Ctrl+I', run: invertSel },
   ],
   view: [
     { label: 'Zoom in', key: '+', run: () => view.zoomStep(1) }, { label: 'Zoom out', key: '-', run: () => view.zoomStep(-1) },
     { label: 'Fit to window', key: 'Ctrl+0', run: () => view.fit() }, '-',
     { label: 'Pixel grid', key: "'", run: toggleGrid, check: () => view.grid },
+    { label: 'Mirror horizontally', run: () => setSym(!symH, symV), check: () => symH },
+    { label: 'Mirror vertically', run: () => setSym(symH, !symV), check: () => symV },
   ],
   palette: [
     { label: 'Add current colour', run: addColor },
@@ -715,6 +955,19 @@ function bindSwitch(id: string, get: () => boolean, set: (v: boolean) => void) {
 }
 bindSwitch('pp', () => perfect, (v) => (perfect = v));
 bindSwitch('fs', () => fillShape, (v) => (fillShape = v));
+bindSwitch('wd', () => wandTouching, (v) => (wandTouching = v));
+function setSym(h: boolean, v: boolean) {
+  symH = h; symV = v;
+  view.sym = { h, v };
+  $('symh').setAttribute('aria-pressed', String(h)); $('symv').setAttribute('aria-pressed', String(v));
+  view.invalidate();
+}
+$('symh').onclick = () => setSym(!symH, symV);
+$('symv').onclick = () => setSym(symH, !symV);
+document.querySelectorAll<HTMLButtonElement>('[data-selmode]').forEach((b) => (b.onclick = () => {
+  selMode = b.dataset.selmode as SelMode;
+  document.querySelectorAll<HTMLButtonElement>('[data-selmode]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+}));
 $('zin').onclick = () => view.zoomStep(1);
 $('zout').onclick = () => view.zoomStep(-1);
 ($('fgin') as HTMLInputElement).addEventListener('input', (e) => setFg((e.target as HTMLInputElement).value));
@@ -726,13 +979,24 @@ addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || typing(e.target)) return;
   const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
   if (mod) {
-    const run = { z: e.shiftKey ? redo : undo, y: redo, s: saveFile, o: openFile, n: openNew, e: openExport, '0': () => view.fit() }[k];
+    const run = {
+      z: e.shiftKey ? redo : undo, y: redo, s: saveFile, o: openFile, n: openNew, e: openExport, '0': () => view.fit(),
+      a: selectAll, d: deselect, i: invertSel, c: () => { copySel(); }, x: cutSel, v: pasteClip,
+    }[k];
     if (run) { e.preventDefault(); run(); }
     return;
   }
   if (e.code === 'Space') { e.preventDefault(); if (!space) { space = true; $('stage').classList.add('pan'); } return; }
-  if (e.key === 'Escape') return closeMenu();
+  if (e.key === 'Escape') { if (!pop.hidden) closeMenu(); else deselect(); return; }
   if (k === 'n' && e.shiftKey) { e.preventDefault(); return addLayer(); }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); return deleteSel(); }
+  if (e.shiftKey && k === 'h') { e.preventDefault(); return transform('fh'); }
+  if (e.shiftKey && k === 'v') { e.preventDefault(); return transform('fv'); }
+  if (tool === 'move' && e.key.startsWith('Arrow')) {
+    e.preventDefault();
+    const d = e.shiftKey ? 8 : 1;
+    return nudge(e.key === 'ArrowLeft' ? -d : e.key === 'ArrowRight' ? d : 0, e.key === 'ArrowUp' ? -d : e.key === 'ArrowDown' ? d : 0);
+  }
   if (k in KEYS) return setTool(KEYS[k]);
   if (k === 'x') { const t = fg; setFg(bg); setBg(t); }
   else if (k === '[') bumpSize(-1);

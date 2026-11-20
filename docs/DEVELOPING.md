@@ -13,6 +13,7 @@ npm run build      # typecheck + production build into dist/
 |---|---|
 | `src/doc.ts` | `Doc` (layers plus the flattened picture in `doc.data`, 0xAABBGGRR), the 2000 px limit, the layer limit (`maxLayers`), layer actions that return undo entries, `Stroke` (records touched pixels on one layer) and `History` (undo stack, capped at 6M entries) |
 | `src/composite.ts` | Pure colour maths: blend modes and opacity |
+| `src/selection.ts` | Pure selection logic: masks (rectangle, lasso, wand, add/remove/invert), run-length form for history, and clips (lift, flip, rotate, place) |
 | `src/project.ts` | The `.pfold` project file: encode, decode, validation |
 | `src/raster.ts` | Pure algorithms: line, rectangle, ellipse, flood fill, pixel-perfect filter |
 | `src/view.ts` | Canvas rendering, zoom steps, pan, grid and checkerboard |
@@ -30,6 +31,9 @@ npm run build      # typecheck + production build into dist/
 - History has two kinds of entry: changed pixels on a layer (by layer id), and layer actions (closures with a `weight` for the memory cap). Visibility and lock toggles are not in history, as in Aseprite.
 - `.pfold` layout: `PFLD` + version byte, then gzip of `[u32 JSON length][JSON][raw RGBA bytes per layer, bottom first]`. The decoder checks the exact size and caps unpacked data at 700 MB. Bump the version byte for any format change.
 - Autosave (IndexedDB key `current`) holds all layers; drawings saved by 0.1 (one `buffer`) still load as a single layer.
+- Selection is one canvas-sized byte mask in `main.ts`, not saved in project files. Every drawing write goes through `put()`, which applies mirroring and clips to the selection. History entries that touch pixels and the selection together are layer entries made by `selEntry` (the mask is stored run-length encoded, so big selections stay small).
+- Dragging a piece re-draws it live through a `Stroke` (a Map entry per pixel), so pieces over 600k opaque pixels refuse to drag and move with the arrow keys instead. Delete, paste, rotate, nudge and clear use `bulkChange`, which builds typed undo arrays directly and handles a fully painted 2000x2000 layer in about 0.3 s.
+- Selection and clipboard are not part of the system clipboard: Copy and Paste work inside Pixfold only.
 - Animation frames would add a dimension to each layer's pixels.
 
 ## Hosting and deploying

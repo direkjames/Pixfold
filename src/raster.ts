@@ -47,6 +47,16 @@ export function ellipsePoints(ax: number, ay: number, bx: number, by: number, fi
   return pts;
 }
 
+/** A pixel and its mirror images across the canvas centre lines (no duplicates; the middle pixel of an odd size maps to itself). */
+export function mirrorSpots(x: number, y: number, W: number, H: number, h: boolean, v: boolean): Pt[] {
+  const out: Pt[] = [{ x, y }];
+  const add = (px: number, py: number) => { if (!out.some((p) => p.x === px && p.y === py)) out.push({ x: px, y: py }); };
+  if (h) add(W - 1 - x, y);
+  if (v) add(x, H - 1 - y);
+  if (h && v) add(W - 1 - x, H - 1 - y);
+  return out;
+}
+
 /** Three points make an "L" when the middle one is a corner pixel that pixel-perfect drawing drops. */
 export function isCorner(a: Pt, b: Pt, c: Pt): boolean {
   if (Math.abs(a.x - c.x) !== 1 || Math.abs(a.y - c.y) !== 1) return false;

@@ -3,6 +3,23 @@ import type { Doc } from './doc';
 export const ZOOMS = [0.25, 0.5, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64];
 
 interface Hover { x: number; y: number; size: number }
+type Pt = { x: number; y: number };
+
+/** Every edge between a selected and an unselected pixel, as one path in canvas units. Built once per selection change. */
+function outline(mask: Uint8Array, W: number, H: number): Path2D {
+  const p = new Path2D();
+  const on = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && mask[y * W + x] === 1;
+  for (let y = 0; y < H; y++) {
+    let tx = -1, bx = -1; // where the current run of top / bottom edges started
+    for (let x = 0; x <= W; x++) {
+      const cur = x < W && mask[y * W + x] === 1;
+      if (cur && !on(x, y - 1)) { if (tx < 0) tx = x; } else if (tx >= 0) { p.moveTo(tx, y); p.lineTo(x, y); tx = -1; }
+      if (cur && !on(x, y + 1)) { if (bx < 0) bx = x; } else if (bx >= 0) { p.moveTo(bx, y + 1); p.lineTo(x, y + 1); bx = -1; }
+      if (on(x - 1, y) !== cur) { p.moveTo(x, y); p.lineTo(x, y + 1); }
+    }
+  }
+  return p;
+}
 
 /** Draws the document and owns the viewport (zoom and pan). Zoom only snaps to fixed steps so pixels stay crisp. */
 export class View {
@@ -13,7 +30,15 @@ export class View {
   ch = 0;
   grid = true;
   hover: Hover | null = null;
+  /** Mirror drawing: a dashed line shows each axis. */
+  sym = { h: false, v: false };
+  /** A selection being dragged out (rectangle box, or lasso points), drawn before it is committed. */
+  marquee: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  lasso: Pt[] | null = null;
+  /** While a selection is being moved its outline follows by this many canvas pixels. */
+  selShift = { x: 0, y: 0 };
   doc!: Doc;
+  private selPath: Path2D | null = null;
   private dpr = 1;
   private ctx: CanvasRenderingContext2D;
   readonly off = document.createElement('canvas');
@@ -38,6 +63,12 @@ export class View {
     this.offCtx.putImageData(this.img, 0, 0);
     doc.dirty = null;
     this.fit();
+  }
+
+  setSelection(mask: Uint8Array | null) {
+    this.selPath = mask ? outline(mask, this.doc.w, this.doc.h) : null;
+    this.selShift = { x: 0, y: 0 };
+    this.invalidate();
   }
 
   readTheme() {
@@ -130,6 +161,35 @@ export class View {
 
     ctx.strokeStyle = col.line; ctx.lineWidth = 1;
     ctx.strokeRect(ox - 0.5, oy - 0.5, bw + 1, bh + 1);
+
+    if (this.sym.h || this.sym.v) {
+      ctx.save();
+      ctx.strokeStyle = '#ff7a3d'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]); ctx.beginPath();
+      if (this.sym.h) { const x = Math.round(ox + bw / 2) + 0.5; ctx.moveTo(x, oy - 14); ctx.lineTo(x, oy + bh + 14); }
+      if (this.sym.v) { const y = Math.round(oy + bh / 2) + 0.5; ctx.moveTo(ox - 14, y); ctx.lineTo(ox + bw + 14, y); }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Selection outline: a solid dark line with white dashes on top, so it shows on any colour.
+    const ants = (draw: () => void, shiftX = 0, shiftY = 0) => {
+      ctx.save();
+      ctx.translate(ox + shiftX * z, oy + shiftY * z);
+      ctx.scale(z, z);
+      ctx.lineJoin = 'miter';
+      ctx.lineWidth = 2 / z; ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.setLineDash([]); draw();
+      ctx.lineWidth = 1.5 / z; ctx.strokeStyle = '#fff'; ctx.setLineDash([4 / z, 4 / z]); draw();
+      ctx.restore();
+    };
+    if (this.selPath) { const path = this.selPath; ants(() => ctx.stroke(path), this.selShift.x, this.selShift.y); }
+    if (this.marquee) {
+      const m = this.marquee;
+      ants(() => ctx.strokeRect(Math.min(m.x0, m.x1), Math.min(m.y0, m.y1), Math.abs(m.x1 - m.x0) + 1, Math.abs(m.y1 - m.y0) + 1));
+    }
+    if (this.lasso && this.lasso.length > 1) {
+      const pts = this.lasso;
+      ants(() => { ctx.beginPath(); ctx.moveTo(pts[0].x + 0.5, pts[0].y + 0.5); for (const q of pts) ctx.lineTo(q.x + 0.5, q.y + 0.5); ctx.stroke(); });
+    }
 
     const h = this.hover;
     if (h && this.inside(h.x, h.y)) {
