@@ -2,8 +2,11 @@
 // (private windows, blocked storage): the app just works without saving.
 const DB = 'pixfold', STORE = 'kv';
 
+export interface SavedLayer { name: string; visible: boolean; locked: boolean; opacity: number; blend: string; buffer: ArrayBuffer }
+/** `layers` is the current format; `buffer` alone is a single-layer drawing saved by version 0.1. */
 export interface Saved {
-  w: number; h: number; buffer: ArrayBuffer; palette: string[]; fg: string; bg: string; name: string;
+  w: number; h: number; layers?: SavedLayer[]; active?: number; buffer?: ArrayBuffer;
+  palette: string[]; fg: string; bg: string; name: string;
 }
 
 function open(): Promise<IDBDatabase> {

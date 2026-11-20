@@ -50,13 +50,14 @@ export function download(blob: Blob, name: string) {
 }
 
 const pngTypes = [{ description: 'PNG image', accept: { 'image/png': ['.png'] } }];
+const projectTypes = [{ description: 'Pixfold project', accept: { 'application/octet-stream': ['.pfold'] } }];
 
 /** Save with the system dialog where the browser has one; otherwise a normal download. Returns the saved name or null if cancelled. */
-export async function savePng(blob: Blob, suggested: string): Promise<string | null> {
+export async function saveBlob(blob: Blob, suggested: string, kind: 'png' | 'project' = 'png'): Promise<string | null> {
   const w = window as any;
   if (w.showSaveFilePicker) {
     try {
-      const h = await w.showSaveFilePicker({ suggestedName: suggested, types: pngTypes });
+      const h = await w.showSaveFilePicker({ suggestedName: suggested, types: kind === 'png' ? pngTypes : projectTypes });
       const s = await h.createWritable();
       await s.write(blob); await s.close();
       return h.name as string;
@@ -69,11 +70,13 @@ export async function savePng(blob: Blob, suggested: string): Promise<string | n
   return suggested;
 }
 
-export async function pickPng(): Promise<{ file: File } | null> {
+export async function pickFile(): Promise<{ file: File } | null> {
   const w = window as any;
   if (w.showOpenFilePicker) {
     try {
-      const [h] = await w.showOpenFilePicker({ types: [{ description: 'Images', accept: { 'image/png': ['.png'], 'image/gif': ['.gif'], 'image/webp': ['.webp'] } }] });
+      const [h] = await w.showOpenFilePicker({ types: [
+        { description: 'Pixfold projects and images', accept: { 'application/octet-stream': ['.pfold'], 'image/png': ['.png'], 'image/gif': ['.gif'], 'image/webp': ['.webp'] } },
+      ] });
       return { file: await h.getFile() };
     } catch (e) {
       if ((e as DOMException).name === 'AbortError') return null;
@@ -82,7 +85,7 @@ export async function pickPng(): Promise<{ file: File } | null> {
   }
   return new Promise((res) => {
     const i = document.createElement('input');
-    i.type = 'file'; i.accept = 'image/png,image/gif,image/webp';
+    i.type = 'file'; i.accept = '.pfold,image/png,image/gif,image/webp';
     i.onchange = () => res(i.files?.[0] ? { file: i.files[0] } : null);
     i.addEventListener('cancel', () => res(null));
     i.click();
